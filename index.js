@@ -24,7 +24,7 @@ const config = {
 
 let initialEnergyValue = null;
 
-cron.schedule(" 15 * * *", async () => {
+cron.schedule("00 22 * * *", async () => {
   console.log("Initializing initial energy value...");
   try {
     const response = await axios.get("https://energybackend.onrender.com/api/sensordata");
