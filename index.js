@@ -2,7 +2,6 @@ const express = require("express");
 const axios = require("axios");
 const bodyParser = require("body-parser");
 const cors = require("cors");
-const cron = require("node-cron");
 const mysql = require("mysql2/promise");
 const fs = require("fs");
 const path = require("path");
@@ -22,11 +21,9 @@ const config = {
   database: "energy"
 };
 
-let initialEnergyValue = null;
-
-cron.schedule("00 22 * * *", async () => {
-  console.log("Initializing initial energy value...");
+async function initializeInitialEnergyValue() {
   try {
+    console.log("Initializing initial energy value...");
     const response = await axios.get("https://energybackend.onrender.com/api/sensordata");
     const initialData = response.data;
     initialEnergyValue = initialData.energy;
@@ -34,18 +31,50 @@ cron.schedule("00 22 * * *", async () => {
   } catch (error) {
     console.error("Error initializing initial energy value:", error);
   }
-});
+}
 
-async function executeQuery(query, values = []) {
-  const connection = await mysql.createConnection(config);
+async function fetchDataAndStore() {
   try {
-    const [rows] = await connection.query(query, values);
-    return rows;
-  } catch (error) {
-    throw error;
-  } finally {
+    console.log("Fetching and storing sensor data...");
+    const response = await axios.get("https://energybackend.onrender.com/api/sensordata");
+    const newData = response.data;
+    
+
+    let energyConsumption = null;
+    if (initialEnergyValue !== null) {
+      energyConsumption = newData.energy - initialEnergyValue;
+    }
+
+    const query = `
+      INSERT INTO sensordata (timestamp, current, power, energy, IRcurrent, IYcurrent, IBcurrent, VRvoltage, VYvoltage, VBvoltage, 
+        IRLcurrent, IYLcurrent, IBLcurrent, VRLvoltage, VYLvoltage, VBLvoltage, R_power, Y_power, B_power, Active_power, Reactive_power, 
+        Power_factor, Energy_Meter, Voltage, energy_consumption) 
+      VALUES (NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const values = [
+      newData.current, newData.power, newData.energy, newData.IRcurrent, newData.IYcurrent, newData.IBcurrent, 
+      newData.VRvoltage, newData.VYvoltage, newData.VBvoltage, newData.IRLcurrent, newData.IYLcurrent, newData.IBLcurrent, 
+      newData.VRLvoltage, newData.VYLvoltage, newData.VBLvoltage, newData.R_power, newData.Y_power, newData.B_power, 
+      newData.Active_power, newData.Reactive_power, newData.Power_factor, newData.Energy_Meter, newData.Voltage, energyConsumption
+    ];
+
+    const connection = await mysql.createConnection(config);
+    await connection.query(query, values);
     await connection.end();
+
+    console.log("Sensor data stored successfully:", newData);
+
+    const currentDate = format(new Date(), 'yyyy-MM-dd');
+    const fileName = `VITB_${currentDate}.txt`;
+    const filePath = path.join("C:\\Users\\Lenovo\\Dropbox\\vit", fileName);
+
+    appendDataToFile(newData, filePath);
+  } catch (error) {
+    console.error("Error fetching and storing sensor data:", error);
   }
+
+  // Call the function recursively with a delay (e.g., every 60 seconds)
+  setTimeout(fetchDataAndStore, 60000);
 }
 
 function formatSensorData(data) {
@@ -66,46 +95,11 @@ function appendDataToFile(data, filePath) {
   });
 }
 
-cron.schedule("*/60 * * * * *", async () => {
-  console.log("Fetching and storing sensor data...");
-  try {
-    const response = await axios.get("https://energybackend.onrender.com/api/sensordata");
-    const newData = response.data;
-    newData.current /= 2;
-    newData.IRcurrent /= 2;
-    newData.IYcurrent /= 2;
-    newData.IBcurrent /= 2;
+// Initialize initial energy value on server startup
+initializeInitialEnergyValue();
 
-    let energyConsumption = null;
-    if (initialEnergyValue !== null) {
-      energyConsumption = newData.energy - initialEnergyValue;
-    }
-
-    const query = `
-      INSERT INTO sensordata (timestamp, current, power, energy, IRcurrent, IYcurrent, IBcurrent, VRvoltage, VYvoltage, VBvoltage, 
-        IRLcurrent, IYLcurrent, IBLcurrent, VRLvoltage, VYLvoltage, VBLvoltage, R_power, Y_power, B_power, Active_power, Reactive_power, 
-        Power_factor, Energy_Meter, Voltage, energy_consumption) 
-      VALUES (NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
-    const values = [
-      newData.current, newData.power, newData.energy, newData.IRcurrent, newData.IYcurrent, newData.IBcurrent, 
-      newData.VRvoltage, newData.VYvoltage, newData.VBvoltage, newData.IRLcurrent, newData.IYLcurrent, newData.IBLcurrent, 
-      newData.VRLvoltage, newData.VYLvoltage, newData.VBLvoltage, newData.R_power, newData.Y_power, newData.B_power, 
-      newData.Active_power, newData.Reactive_power, newData.Power_factor, newData.Energy_Meter, newData.Voltage, energyConsumption
-    ];
-
-    await executeQuery(query, values);
-    console.log("Sensor data stored successfully:", newData);
-
-    const currentDate = format(new Date(), 'yyyy-MM-dd');
-    const fileName = `VITB_${currentDate}.txt`;
-    const filePath = path.join("C:\\Users\\Lenovo\\Dropbox\\vit", fileName);
-
-    appendDataToFile(newData, filePath);
-  } catch (error) {
-    console.error("Error fetching and storing sensor data:", error);
-  }
-});
+// Start fetching and storing sensor data
+fetchDataAndStore();
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
